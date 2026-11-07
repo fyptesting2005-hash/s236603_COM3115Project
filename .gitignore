@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Node
+node_modules/
+frontend/dist/
+*.local
+
+# Data caches
+backend/app/data/*.db
+*.sqlite
+*.sqlite3
+!backend/app/data/.gitkeep
+
+# Env & IDE
+.env
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
