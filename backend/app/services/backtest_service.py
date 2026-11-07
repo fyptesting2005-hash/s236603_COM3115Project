@@ -43,10 +43,19 @@ class BacktestService:
         self.optimizer = optimizer or OptimizerService()
         self.ml = ml or MLService(seed=seed)
         self.seed = seed
+        self._cache: dict[tuple, dict] = {}
 
     def run(self, prices: pd.DataFrame, strategy: str = "max_sharpe",
             use_ml: bool = True, window_days: int = TRADING_DAYS) -> dict:
-        """Run the backtest; returns {dates, strategy_nav, benchmark_navs, metrics}."""
+        """Run the backtest; returns {dates, strategy_nav, benchmark_navs, metrics}.
+
+        Results are cached per (strategy, use_ml, last price date) so repeated
+        dashboard views (e.g. during a live demo) are served instantly; the cache
+        invalidates automatically when the price panel moves forward.
+        """
+        cache_key = (strategy, bool(use_ml), str(prices.index.max().date()))
+        if cache_key in self._cache:
+            return self._cache[cache_key]
         if strategy not in ("max_sharpe", "max_sharpe_ml", "min_vol"):
             raise BacktestError(f"unknown strategy: {strategy}")
         returns = prices.pct_change().dropna(how="any")
@@ -107,7 +116,8 @@ class BacktestService:
 
         strategy_curve = pd.Series(nav, index=pd.to_datetime(nav_dates), name="strategy")
 
-        # benchmarks: buy-and-hold from the first rebalance date
+        # benchmarks: buy-and-hold from the first rebalance date, resampled to the
+        # same month-end grid as the strategy so all curves share one axis
         bench = {}
         base_date = pd.to_datetime(nav_dates[0])
         for ticker in ("2800.HK", "SPY"):
@@ -115,16 +125,15 @@ class BacktestService:
                 continue
             series = prices.loc[prices.index >= base_date, ticker]
             series = series / series.iloc[0]
-            bench[ticker] = series
+            bench[ticker] = series.reindex(strategy_curve.index).ffill()
 
         all_metrics = [_metrics(strategy_curve)]
         names = [strategy]
         for ticker, curve in bench.items():
-            aligned = curve.reindex(strategy_curve.index).ffill()
-            all_metrics.append(_metrics(aligned))
+            all_metrics.append(_metrics(curve))
             names.append(f"benchmark_{ticker}")
 
-        return {
+        result = {
             "dates": [d.strftime("%Y-%m-%d") for d in strategy_curve.index],
             "strategy_nav": [float(v) for v in strategy_curve.values],
             "benchmarks": {
@@ -136,3 +145,5 @@ class BacktestService:
                 {"name": n, **m} for n, m in zip(names, all_metrics)
             ],
         }
+        self._cache[cache_key] = result
+        return result
