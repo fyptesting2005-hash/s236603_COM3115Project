@@ -20,6 +20,23 @@ function PortfolioTab({ profile }) {
   );
   const isWarning = optimization.suitability_note.startsWith("Warning");
   const names = optimization.amount_allocations;
+  const [aiState, setAiState] = useState({ loading: false, error: "", data: null });
+
+  const explain = async () => {
+    setAiState({ loading: true, error: "", data: null });
+    try {
+      const data = await api.explain({
+        profile: optimization.profile,
+        weights,
+        expected_return: optimization.expected_return,
+        volatility: optimization.volatility,
+        sharpe: optimization.sharpe,
+      });
+      setAiState({ loading: false, error: "", data });
+    } catch (e) {
+      setAiState({ loading: false, error: String(e.message || e), data: null });
+    }
+  };
 
   return (
     <div>
@@ -76,6 +93,39 @@ function PortfolioTab({ profile }) {
           </div>
         </div>
         <div className={`note ${isWarning ? "warning-note" : ""}`}>{optimization.suitability_note}</div>
+
+        <div style={{ marginTop: 16 }}>
+          <button className="primary" onClick={explain} disabled={aiState.loading} data-testid="explain-btn">
+            {aiState.loading ? "Thinking…" : "✨ Explain this portfolio (AI)"}
+          </button>
+          {aiState.error && <div className="error" style={{ marginTop: 10 }}>{aiState.error}</div>}
+          {aiState.data && (
+            <div className="card" style={{ marginTop: 12, background: "#f8fafc" }} data-testid="ai-explanation">
+              <h3 style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                AI commentary
+                <span className="badge" style={{
+                  background: aiState.data.source === "gemini" ? "#e3f2f0" : "#f0ede5",
+                  color: aiState.data.source === "gemini" ? "#0b6b62" : "#7a6a4a",
+                  fontSize: 11,
+                }}>
+                  {aiState.data.source === "gemini" ? "Gemini" : "offline fallback"}
+                  {aiState.data.cached ? " · cached" : ""}
+                </span>
+              </h3>
+              <p style={{ fontSize: 14, lineHeight: 1.55, color: "#1c2a3a", margin: "0 0 10px" }}>
+                {aiState.data.summary}
+              </p>
+              <ul style={{ margin: "0 0 10px", paddingLeft: 20 }}>
+                {aiState.data.highlights.map((h, i) => (
+                  <li key={i} style={{ fontSize: 13.5, color: "#3a4a5a", marginBottom: 5 }}>{h}</li>
+                ))}
+              </ul>
+              <p style={{ fontSize: 13, color: "#7a4a1e", margin: 0 }}>
+                <b>Risk:</b> {aiState.data.risk_note}
+              </p>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

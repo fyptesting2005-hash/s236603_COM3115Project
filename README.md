@@ -20,6 +20,7 @@ prediction, wrapped in a compliance-aware onboarding flow (SFC suitability & KYC
 | 5 | Vectorized backtesting vs. HSI / SPY benchmarks (CAGR, Sharpe, Max Drawdown) | Analytics (MILO d) |
 | 6 | React dashboard: frontier, allocation, equity curve, EDA tab | Full-stack integration (MILO b) |
 | 7 | Compliance module: risk-suitability matching, disclaimers, audit log | Regulatory (MILO c) |
+| 8 | Gemini-powered plain-language portfolio commentary (grounded on computed metrics, offline fallback) | GenAI integration (MILO b/d) |
 
 ## Architecture
 
@@ -59,6 +60,13 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 # API docs: http://localhost:8000/docs
 ```
+
+**AI commentary (optional):** copy `backend/.env.example` to `backend/.env` and paste a
+Gemini API key to enable the "Explain this portfolio" button (`POST /api/explain`). The
+key is read from the `GEMINI_API_KEY` env var or that file and is git-ignored. Without a
+key — or offline — the endpoint deterministically degrades to a rule-based explanation,
+so demos never break. Calls go to the `v1` REST endpoint with a model fallback chain
+(`gemini-3.5-flash-lite` → `gemini-3.1-flash-lite` → `gemma-4-31b-it`).
 
 ### Frontend (Node 18+)
 

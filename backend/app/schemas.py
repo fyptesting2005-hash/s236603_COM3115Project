@@ -106,6 +106,22 @@ class AuditEntry(BaseModel):
     use_ml: bool
 
 
+class ExplainRequest(BaseModel):
+    profile: str = Field(pattern="^(conservative|balanced|aggressive)$")
+    weights: Dict[str, float]
+    expected_return: float = Field(ge=-1.0, le=2.0)
+    volatility: float = Field(ge=0.0, le=2.0)
+    sharpe: float = Field(ge=-10.0, le=10.0)
+
+
+class ExplainResponse(BaseModel):
+    summary: str
+    highlights: List[str]
+    risk_note: str
+    source: str
+    cached: bool = False
+
+
 class ProfileResponse(BaseModel):
     score: float
     profile: str

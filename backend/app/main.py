@@ -15,9 +15,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import APP_DIR, ASSET_UNIVERSE, DB_PATH, RiskProfile, score_to_profile
 from .schemas import (
     AuditEntry, BacktestRequest, BacktestResponse, EdaResponse, AssetStats,
-    FrontierPoint, MarketPoint, MarketResponse, OptimizeRequest, OptimizeResponse,
-    ProfileResponse, RiskAnswers,
+    ExplainRequest, ExplainResponse, FrontierPoint, MarketPoint, MarketResponse,
+    OptimizeRequest, OptimizeResponse, ProfileResponse, RiskAnswers,
 )
+from .services.ai_service import AIService
 from .services.backtest_service import BacktestError, BacktestService
 from .services.data_service import DataUnavailableError, DataService
 from .services.ml_service import MLService
@@ -102,12 +103,14 @@ def create_app(data_service: DataService | None = None,
     ml = MLService()
     backtester = BacktestService(optimizer=optimizer, ml=ml)
     audit = AuditLog(audit_path or APP_DIR / "data" / "audit.db")
+    ai = AIService()
 
     app.state.data_service = ds
     app.state.optimizer = optimizer
     app.state.ml = ml
     app.state.backtester = backtester
     app.state.audit = audit
+    app.state.ai = ai
 
     def history_or_404():
         try:
@@ -256,6 +259,24 @@ def create_app(data_service: DataService | None = None,
     @app.get("/api/audit", response_model=list[AuditEntry])
     def audit_list(limit: int = 50) -> list[AuditEntry]:
         return [AuditEntry(**e) for e in audit.list(limit)]
+
+    # ---------- AI commentary ----------
+    @app.post("/api/explain", response_model=ExplainResponse)
+    def explain(req: ExplainRequest) -> ExplainResponse:
+        """Plain-language explanation of an already-computed portfolio.
+
+        Grounded on the numbers the optimizer actually produced; degrades to a
+        deterministic rule-based text when the AI backend is unavailable.
+        """
+        definition = RiskProfile.DEFINITIONS[req.profile]
+        result = ai.explain_portfolio(
+            profile_label=definition["label"],
+            weights=req.weights,
+            expected_return=req.expected_return,
+            volatility=req.volatility,
+            sharpe=req.sharpe,
+        )
+        return ExplainResponse(**result)
 
     return app
 

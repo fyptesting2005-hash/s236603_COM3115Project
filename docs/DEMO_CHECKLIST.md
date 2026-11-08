@@ -24,9 +24,13 @@ Print this page or keep it on a second screen during the presentation (slides:
 | 3 | Efficient Frontier | Click tab | 50-point frontier; three profile dots; aggressive marker on the curve |
 | 4 | Backtest | Click tab; show Max Sharpe first, then ML views | Max Sharpe: CAGR 7.3%, Sharpe 0.74, MDD −21.3%; ML lower (honest result) |
 | 5 | Data Explorer (EDA) | Click tab; scroll to correlation matrix | 2,797 days; 2800.HK vs SPY correlation ≈ 0.12; bonds negative |
+| 6 | Portfolio (AI) | Back on Portfolio tab, click "✨ Explain this portfolio (AI)" | Gemini commentary grounded on the real weights/metrics; badge shows "Gemini" |
 
 Fallbacks:
 
+- **Gemini unreachable / no key** → `/api/explain` degrades to the rule-based
+  explanation and the badge shows "offline fallback" — say: "the AI layer degrades
+  gracefully, exactly like the rest of the system."
 - **Network dies** → backend already serves from the SQLite cache; if the cache is
   missing, `DataService` falls back to `prices_snapshot.csv`. Say: "the demo is
   deliberately offline-capable."
@@ -47,3 +51,6 @@ Fallbacks:
   committed for offline demos.
 - **How do you know the ML isn't overfitting?** Walk-forward-only validation (refit
   monthly, train strictly on the past); fixed seeds; deterministic tests.
+- **Can the AI hallucinate numbers?** The prompt carries only the optimizer's computed
+  metrics and instructs the model not to invent figures; any parse failure falls back to
+  the rule-based text. The badge always shows which source produced the commentary.
