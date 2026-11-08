@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import Questionnaire from "./components/Questionnaire.jsx";
 import Dashboard from "./components/Dashboard.jsx";
+import Copilot from "./components/Copilot.jsx";
 
 export default function App() {
   const [profile, setProfile] = useState(null); // {score, profile, label, ...}
@@ -25,6 +26,7 @@ export default function App() {
           FinSight · COM3115 Financial Technology Final Project · Track 2 (AI &amp; ML in
           FinTech) · Markowitz Efficient Frontier + Random Forest expected-return views
         </p>
+        <Copilot />
       </main>
     </div>
   );

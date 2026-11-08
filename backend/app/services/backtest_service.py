@@ -147,3 +147,76 @@ class BacktestService:
         }
         self._cache[cache_key] = result
         return result
+
+    def backtest_fixed_weights(self, prices: pd.DataFrame,
+                               weights: dict[str, float],
+                               window_days: int | None = None) -> dict:
+        """Backtest a constant-mix portfolio of fixed target weights.
+
+        Monthly rebalanced to the target weights (drift-induced turnover only),
+        same 10 bps cost model and benchmarks as run(). No optimizer is involved,
+        so what-if questions answer in milliseconds. Deterministic.
+        """
+        if not weights:
+            raise BacktestError("weights must not be empty")
+        unknown = [t for t in weights if t not in prices.columns]
+        if unknown:
+            raise BacktestError(f"unknown tickers: {unknown}")
+        if any(w < -1e-9 for w in weights.values()):
+            raise BacktestError("weights must be non-negative")
+        total = sum(weights.values())
+        if abs(total - 1.0) > 1e-6:
+            raise BacktestError(f"weights must sum to 1 (got {total:.4f})")
+
+        target = {t: float(w) for t, w in weights.items()}
+        returns = prices.pct_change().dropna(how="any")
+
+        month_ends = prices.groupby(prices.index.to_period("M")).tail(1).index
+        nav = [1.0]
+        nav_dates = [month_ends[0]]
+        drifted = dict(target)  # weights after last month's drift
+
+        for start in month_ends[:-1]:
+            next_locs = [prices.index.get_loc(d) for d in month_ends if d > start]
+            hold_end = prices.index[next_locs[0]] if next_locs else prices.index[-1]
+            step_rets = returns.loc[start: hold_end].iloc[1:]
+            period_rets = (
+                (1.0 + step_rets).prod(axis=0) - 1.0 if not step_rets.empty
+                else pd.Series(0.0, index=returns.columns)
+            )
+            # rebalance to target: cost on the turnover needed at this month start
+            turnover = sum(abs(target.get(t, 0.0) - drifted.get(t, 0.0))
+                           for t in prices.columns)
+            cost = turnover * REBALANCE_COST_BPS / 10_000
+            w = np.array([target.get(t, 0.0) for t in prices.columns])
+            port_ret = float(np.dot(w, period_rets.values)) - cost
+            nav.append(nav[-1] * (1 + port_ret))
+            nav_dates.append(hold_end)
+            # drift the weights through the month's asset returns (normalized to 1)
+            gross = (1.0 + period_rets)
+            pgross = float(np.dot(w, gross.values))
+            if pgross > 0:
+                for t in prices.columns:
+                    drifted[t] = target.get(t, 0.0) * float(gross.get(t, 1.0)) / pgross
+
+        strategy_curve = pd.Series(nav, index=pd.to_datetime(nav_dates), name="fixed_weights")
+        base_date = pd.to_datetime(nav_dates[0])
+        bench = {}
+        for ticker in ("2800.HK", "SPY"):
+            if ticker not in prices.columns:
+                continue
+            series = prices.loc[prices.index >= base_date, ticker]
+            bench[ticker] = (series / series.iloc[0]).reindex(strategy_curve.index).ffill()
+
+        metrics = [_metrics(strategy_curve)]
+        names = ["fixed_weights"]
+        for ticker, curve in bench.items():
+            metrics.append(_metrics(curve))
+            names.append(f"benchmark_{ticker}")
+
+        return {
+            "weights": target,
+            "dates": [d.strftime("%Y-%m-%d") for d in strategy_curve.index],
+            "nav": [float(v) for v in strategy_curve.values],
+            "metrics": [{"name": n, **m} for n, m in zip(names, metrics)],
+        }

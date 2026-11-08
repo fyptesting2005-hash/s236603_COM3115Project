@@ -14,11 +14,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import APP_DIR, ASSET_UNIVERSE, DB_PATH, RiskProfile, score_to_profile
 from .schemas import (
-    AuditEntry, BacktestRequest, BacktestResponse, EdaResponse, AssetStats,
-    ExplainRequest, ExplainResponse, FrontierPoint, MarketPoint, MarketResponse,
-    OptimizeRequest, OptimizeResponse, ProfileResponse, RiskAnswers,
+    AgentChatRequest, AuditEntry, BacktestRequest, BacktestResponse, EdaResponse,
+    AssetStats, ExplainRequest, ExplainResponse, FrontierPoint, MarketPoint,
+    MarketResponse, OptimizeRequest, OptimizeResponse, ProfileResponse, RiskAnswers,
 )
 from .services.ai_service import AIService
+from .services.agent_service import AgentError, AgentService
 from .services.backtest_service import BacktestError, BacktestService
 from .services.data_service import DataUnavailableError, DataService
 from .services.ml_service import MLService
@@ -32,7 +33,7 @@ DISCLAIMER = (
 
 
 class AuditLog:
-    """Append-only SQLite audit trail of every recommendation (compliance)."""
+    """Append-only SQLite audit trail of recommendations and agent questions."""
 
     def __init__(self, db_path: Path) -> None:
         self.db_path = Path(db_path)
@@ -42,6 +43,12 @@ class AuditLog:
                 " id INTEGER PRIMARY KEY AUTOINCREMENT,"
                 " ts TEXT NOT NULL, profile TEXT NOT NULL, weights_json TEXT NOT NULL,"
                 " expected_return REAL NOT NULL, volatility REAL NOT NULL, use_ml INTEGER NOT NULL)"
+            )
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS agent_questions ("
+                " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                " ts TEXT NOT NULL, question TEXT NOT NULL, answer TEXT NOT NULL,"
+                " tools_json TEXT NOT NULL)"
             )
 
     def _connect(self) -> sqlite3.Connection:
@@ -69,6 +76,36 @@ class AuditLog:
              "expected_return": r[4], "volatility": r[5], "use_ml": bool(r[6])}
             for r in rows
         ]
+
+    def log_agent_question(self, question: str, answer: str, tools: list[str]) -> int:
+        with self._connect() as conn:
+            cur = conn.execute(
+                "INSERT INTO agent_questions (ts, question, answer, tools_json)"
+                " VALUES (?, ?, ?, ?)",
+                (datetime.now(timezone.utc).isoformat(), question, answer,
+                 json.dumps(tools)),
+            )
+            return int(cur.lastrowid)
+
+
+def compute_asset_stats(prices) -> list[dict]:
+    """Per-ticker full-sample stats shared by the EDA endpoint and the agent tool."""
+    rets = prices.pct_change().dropna(how="any")
+    stats = []
+    for ticker in prices.columns:
+        cum = (1 + rets[ticker]).cumprod()
+        mdd = float((cum / cum.cummax() - 1).min())
+        ann_ret = float(rets[ticker].mean() * 252)
+        ann_vol = float(rets[ticker].std() * (252 ** 0.5))
+        stats.append({
+            "ticker": ticker,
+            "ann_return": round(ann_ret, 4),
+            "ann_vol": round(ann_vol, 4),
+            "sharpe": round(ann_ret / ann_vol, 3) if ann_vol > 0 else 0.0,
+            "max_drawdown": round(mdd, 4),
+            "missing_days": int(prices[ticker].isna().sum()),
+        })
+    return stats
 
 
 def score_answers(answers: RiskAnswers) -> float:
@@ -105,12 +142,57 @@ def create_app(data_service: DataService | None = None,
     audit = AuditLog(audit_path or APP_DIR / "data" / "audit.db")
     ai = AIService()
 
+    def _agent_tools() -> dict:
+        """Tool implementations backed by the real data pipeline."""
+
+        def get_universe() -> dict:
+            return {"tickers": [{"ticker": t, "name": n} for t, n in ASSET_UNIVERSE.items()]}
+
+        def get_asset_stats() -> dict:
+            prices = history_or_404()
+            return {"assets": compute_asset_stats(prices),
+                    "sample": f"{prices.index.min().date()} to {prices.index.max().date()}"}
+
+        def get_correlation() -> dict:
+            prices = history_or_404()
+            rets = prices.pct_change().dropna(how="any")
+            corr = rets.corr().round(3)
+            return {a: {b: float(corr.loc[a, b]) for b in corr.columns} for a in corr.index}
+
+        def backtest_fixed_weights(weights: dict) -> dict:
+            prices = history_or_404()
+            result = backtester.backtest_fixed_weights(prices, weights)
+            metric_summary = [
+                {k: m[k] for k in ("name", "cagr", "volatility", "sharpe", "max_drawdown")}
+                for m in result["metrics"]
+            ]
+            return {
+                "weights": result["weights"],
+                "period": f"{result['dates'][0]} to {result['dates'][-1]}",
+                "final_growth_multiple": round(result["nav"][-1], 3),
+                "metrics": metric_summary,
+            }
+
+        return {
+            "get_universe": get_universe,
+            "get_asset_stats": get_asset_stats,
+            "get_correlation": get_correlation,
+            "backtest_fixed_weights": backtest_fixed_weights,
+        }
+
+    def _build_agent() -> AgentService:
+        return AgentService(tools=_agent_tools())
+
+    agent = _build_agent()
+
     app.state.data_service = ds
     app.state.optimizer = optimizer
     app.state.ml = ml
     app.state.backtester = backtester
     app.state.audit = audit
     app.state.ai = ai
+    app.state.agent = agent
+    app.state.rebuild_agent = _build_agent
 
     def history_or_404():
         try:
@@ -213,20 +295,16 @@ def create_app(data_service: DataService | None = None,
     def eda() -> EdaResponse:
         prices = history_or_404()
         rets = prices.pct_change().dropna(how="any")
-        assets = []
-        for ticker in prices.columns:
-            cum = (1 + rets[ticker]).cumprod()
-            running_max = cum.cummax()
-            mdd = float((cum / running_max - 1).min())
-            ann_ret = float(rets[ticker].mean() * 252)
-            ann_vol = float(rets[ticker].std() * (252 ** 0.5))
-            assets.append(AssetStats(
-                ticker=ticker, name=ASSET_UNIVERSE.get(ticker, ticker),
-                ann_return=ann_ret, ann_vol=ann_vol,
-                sharpe=ann_ret / ann_vol if ann_vol > 0 else 0.0,
-                max_drawdown=mdd,
-                missing_days=int(prices[ticker].isna().sum()),
-            ))
+        stats = compute_asset_stats(prices)
+        assets = [
+            AssetStats(
+                ticker=s["ticker"], name=ASSET_UNIVERSE.get(s["ticker"], s["ticker"]),
+                ann_return=s["ann_return"], ann_vol=s["ann_vol"],
+                sharpe=s["sharpe"], max_drawdown=s["max_drawdown"],
+                missing_days=s["missing_days"],
+            )
+            for s in stats
+        ]
         corr = rets.corr().round(3)
         return EdaResponse(
             rows=int(len(prices)),
@@ -259,6 +337,31 @@ def create_app(data_service: DataService | None = None,
     @app.get("/api/audit", response_model=list[AuditEntry])
     def audit_list(limit: int = 50) -> list[AuditEntry]:
         return [AuditEntry(**e) for e in audit.list(limit)]
+
+    # ---------- AI Copilot agent ----------
+    @app.post("/api/agent/chat")
+    def agent_chat(req: AgentChatRequest) -> dict:
+        if not agent.available:
+            raise HTTPException(
+                status_code=503,
+                detail="Copilot is unavailable: no GEMINI_API_KEY configured. "
+                       "All other FinSight features work without it.",
+            )
+        try:
+            result = agent.chat(req.question, history=req.history)
+        except AgentError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        tools_used = sorted({t["tool"] for t in result["tool_trace"]})
+        audit.log_agent_question(req.question, result["answer"], tools_used)
+        return {
+            "answer": result["answer"],
+            "tool_trace": [
+                {"tool": t["tool"], "args": t["args"],
+                 "result": t["result"] if isinstance(t["result"], dict) else {"raw": str(t["result"])}}
+                for t in result["tool_trace"]
+            ],
+            "tools_used": tools_used,
+        }
 
     # ---------- AI commentary ----------
     @app.post("/api/explain", response_model=ExplainResponse)

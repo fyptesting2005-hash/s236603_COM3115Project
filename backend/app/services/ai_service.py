@@ -36,16 +36,26 @@ SYSTEM_PROMPT = (
 )
 
 
-def _load_api_key() -> str:
-    key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if key:
-        return key
+def _load_env_vars() -> dict[str, str]:
+    """GEMINI_* keys from the environment, then from the git-ignored backend/.env."""
+    env: dict[str, str] = {}
+    for name, value in os.environ.items():
+        if name.startswith("GEMINI_") and value.strip():
+            env[name] = value.strip()
     env_file = APP_DIR.parent / ".env"
     if env_file.exists():
         for line in env_file.read_text(encoding="utf-8").splitlines():
-            if line.strip().startswith("GEMINI_API_KEY="):
-                return line.split("=", 1)[1].strip()
-    return ""
+            line = line.strip()
+            if "=" in line and not line.startswith("#"):
+                name, value = line.split("=", 1)
+                name = name.strip()
+                if name.startswith("GEMINI_") and value.strip() and name not in env:
+                    env[name] = value.strip()
+    return env
+
+
+def _load_api_key() -> str:
+    return _load_env_vars().get("GEMINI_API_KEY", "")
 
 
 class AIService:

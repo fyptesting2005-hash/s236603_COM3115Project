@@ -25,6 +25,7 @@ Print this page or keep it on a second screen during the presentation (slides:
 | 4 | Backtest | Click tab; show Max Sharpe first, then ML views | Max Sharpe: CAGR 7.3%, Sharpe 0.74, MDD −21.3%; ML lower (honest result) |
 | 5 | Data Explorer (EDA) | Click tab; scroll to correlation matrix | 2,797 days; 2800.HK vs SPY correlation ≈ 0.12; bonds negative |
 | 6 | Portfolio (AI) | Back on Portfolio tab, click "✨ Explain this portfolio (AI)" | Gemini commentary grounded on the real weights/metrics; badge shows "Gemini" |
+| 7 | Copilot (agent) | Click the ✦ floating button (bottom-right), pick "What if gold were 30%…?" | Answer with real CAGR/vol/Sharpe/MDD numbers + a `backtest_fixed_weights` tool chip |
 
 Fallbacks:
 
@@ -54,3 +55,9 @@ Fallbacks:
 - **Can the AI hallucinate numbers?** The prompt carries only the optimizer's computed
   metrics and instructs the model not to invent figures; any parse failure falls back to
   the rule-based text. The badge always shows which source produced the commentary.
+- **Is the Copilot just ChatGPT plugged in?** No — it is tool-grounded: it may only get
+  numbers by calling FinSight's own endpoints (asset stats, correlations, fixed-weight
+  backtests), the tool-call trace is displayed under every answer, and questions are
+  audit-logged. Show the chip under an answer when asked.
+- **What happens to the Copilot without an API key?** It shows "offline" and everything
+  else (questionnaire, optimizer, backtest, EDA) keeps working — deliberate degradation.

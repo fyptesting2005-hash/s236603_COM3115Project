@@ -30,6 +30,7 @@ export const api = {
   walkforward: () => request("/api/ml/walkforward"),
   audit: () => request("/api/audit"),
   explain: (req) => request("/api/explain", { method: "POST", body: JSON.stringify(req) }),
+  agentChat: (req) => request("/api/agent/chat", { method: "POST", body: JSON.stringify(req) }),
 };
 
 export const pct = (x, digits = 1) =>

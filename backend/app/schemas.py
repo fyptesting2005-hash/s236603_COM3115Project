@@ -114,6 +114,16 @@ class ExplainRequest(BaseModel):
     sharpe: float = Field(ge=-10.0, le=10.0)
 
 
+class AgentTurn(BaseModel):
+    role: str = Field(pattern="^(user|assistant)$")
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class AgentChatRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=1000)
+    history: List[AgentTurn] = Field(default_factory=list, max_length=6)
+
+
 class ExplainResponse(BaseModel):
     summary: str
     highlights: List[str]

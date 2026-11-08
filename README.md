@@ -21,6 +21,7 @@ prediction, wrapped in a compliance-aware onboarding flow (SFC suitability & KYC
 | 6 | React dashboard: frontier, allocation, equity curve, EDA tab | Full-stack integration (MILO b) |
 | 7 | Compliance module: risk-suitability matching, disclaimers, audit log | Regulatory (MILO c) |
 | 8 | Gemini-powered plain-language portfolio commentary (grounded on computed metrics, offline fallback) | GenAI integration (MILO b/d) |
+| 9 | **FinSight Copilot** — a tool-grounded AI agent: it answers what-if questions by calling the system's own analytics (asset stats, correlations, fixed-weight backtests); every answer ships with the tool-call trace | Agentic AI (MILO b) |
 
 ## Architecture
 
@@ -67,6 +68,13 @@ key is read from the `GEMINI_API_KEY` env var or that file and is git-ignored. W
 key — or offline — the endpoint deterministically degrades to a rule-based explanation,
 so demos never break. Calls go to the `v1` REST endpoint with a model fallback chain
 (`gemini-3.5-flash-lite` → `gemini-3.1-flash-lite` → `gemma-4-31b-it`).
+
+**FinSight Copilot (optional, agentic):** set `GEMINI_API_KEY_AGENT` in the same `.env`
+to enable the floating Copilot on the dashboard (`POST /api/agent/chat`). The Copilot is
+a tool-grounded agent: it can call `get_universe`, `get_asset_stats`, `get_correlation`
+and `backtest_fixed_weights` (a fast constant-mix backtest added for what-if questions).
+Answers must be grounded in tool output — the full tool-call trace is returned and shown
+in the UI. Max 4 tool rounds per question; every question is written to the audit log.
 
 ### Frontend (Node 18+)
 
