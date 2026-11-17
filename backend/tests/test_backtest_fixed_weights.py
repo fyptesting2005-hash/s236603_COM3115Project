@@ -95,3 +95,12 @@ def test_api_agent_offline_is_503(client, monkeypatch):
     r = client.post("/api/agent/chat", json={"question": "hi"})
     assert r.status_code == 503
     assert "unavailable" in r.json()["detail"]
+
+
+def test_api_agent_questions_endpoint(client, monkeypatch):
+    canned = [{"id": 1, "ts": "2026-11-18T00:00:00", "question": "q?",
+               "answer": "a", "tools": ["get_correlation"]}]
+    monkeypatch.setattr(client.app.state.audit, "list_agent", lambda limit=50: canned)
+    r = client.get("/api/agent/questions")
+    assert r.status_code == 200
+    assert r.json()[0]["tools"] == ["get_correlation"]

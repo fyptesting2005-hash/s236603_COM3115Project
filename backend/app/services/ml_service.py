@@ -62,6 +62,7 @@ class MLService:
     def __init__(self, seed: int = 42) -> None:
         self.seed = seed
         self._model: RandomForestRegressor | None = None
+        self._views_cache: dict[str, dict[str, float]] = {}
 
     # ---------- model ----------
     def _new_model(self) -> RandomForestRegressor:
@@ -85,13 +86,19 @@ class MLService:
         eval_months = list(month_keys[max(min_train_months, len(month_keys) - 36):])
 
         preds, actuals, baselines = [], [], []
+        data_dates = pd.to_datetime(data["date"])
         for month in eval_months:
             month_end = month.to_timestamp(how="end")
-            train = data[pd.to_datetime(data["date"]) <= month_end]
+            month_data = data[data_dates <= month_end]
+            if month_data.empty:
+                continue
             # predict on the last available day of this month
-            cut = pd.to_datetime(train["date"]).max()
-            test = train[pd.to_datetime(train["date"]) == cut]
-            if test.empty:
+            month_dates = pd.to_datetime(month_data["date"])
+            cut = month_dates.max()
+            test = month_data[month_dates == cut]
+            # training must exclude the prediction date itself — no look-ahead
+            train = month_data[month_dates < cut]
+            if test.empty or train.empty:
                 continue
             model = self._new_model()
             model.fit(train[FEATURE_COLS], train["fwd_return"])
@@ -120,7 +127,14 @@ class MLService:
         }
 
     def current_views(self, prices: pd.DataFrame) -> dict[str, float]:
-        """Fit on all history and predict forward annualized return per ticker."""
+        """Fit on all history and predict forward annualized return per ticker.
+
+        Cached per price-panel date: a 200-tree refit on every /api/optimize call
+        is wasted work when the panel has not moved.
+        """
+        cache_key = str(prices.index.max().date())
+        if cache_key in self._views_cache:
+            return self._views_cache[cache_key]
         data = build_dataset(prices)
         if data.empty:
             return {}
@@ -129,7 +143,9 @@ class MLService:
         model = self._new_model()
         model.fit(data[FEATURE_COLS], data["fwd_return"])
         preds = model.predict(current[FEATURE_COLS])
-        return dict(zip(current["ticker"], (float(p) for p in preds)))
+        views = dict(zip(current["ticker"], (float(p) for p in preds)))
+        self._views_cache[cache_key] = views
+        return views
 
     def blend_mu(self, mu_hist: pd.Series, views: dict[str, float],
                  alpha: float = ML_BLEND_ALPHA) -> pd.Series:

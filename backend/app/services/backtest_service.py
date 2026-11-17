@@ -174,7 +174,9 @@ class BacktestService:
         month_ends = prices.groupby(prices.index.to_period("M")).tail(1).index
         nav = [1.0]
         nav_dates = [month_ends[0]]
-        drifted = dict(target)  # weights after last month's drift
+        # start from all-cash so the first rebalance pays the same 10 bps entry
+        # cost as run() — keeps Copilot what-if numbers consistent with the dashboard
+        drifted = {t: 0.0 for t in prices.columns}
 
         for start in month_ends[:-1]:
             next_locs = [prices.index.get_loc(d) for d in month_ends if d > start]

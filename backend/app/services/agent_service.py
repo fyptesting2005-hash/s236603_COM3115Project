@@ -16,6 +16,7 @@ Constraints:
 from __future__ import annotations
 
 import json
+import time
 
 import httpx
 
@@ -25,6 +26,8 @@ ENDPOINT = "https://generativelanguage.googleapis.com/v1/models/{model}:generate
 AGENT_MAX_TOOL_ROUNDS = 4
 TIMEOUT_S = 45.0
 MODELS = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
+RETRY_BACKOFF_S = 2.0
+DEADLINE_S = 120.0
 
 AGENT_SYSTEM_PROMPT = (
     "You are FinSight Copilot, the assistant inside an educational Markowitz "
@@ -115,8 +118,9 @@ class AgentService:
         contents.append({"role": "user", "parts": [{"text": question}]})
 
         tool_trace: list[dict] = []
+        deadline = time.monotonic() + DEADLINE_S
         for _ in range(AGENT_MAX_TOOL_ROUNDS):
-            data = self._request(contents, tools=True)
+            data = self._request(contents, tools=True, deadline=deadline)
             parts = data["candidates"][0]["content"].get("parts", [])
             contents.append({"role": "model", "parts": parts})
 
@@ -139,7 +143,7 @@ class AgentService:
             contents.append({"role": "user", "parts": response_parts})
 
         # round budget exhausted -> one tool-free call forces a text answer
-        data = self._request(contents, tools=False)
+        data = self._request(contents, tools=False, deadline=deadline)
         parts = data["candidates"][0]["content"].get("parts", [])
         text = "".join(p.get("text", "") for p in parts).strip()
         return {"answer": text or "(empty reply)", "tool_trace": tool_trace}
@@ -154,7 +158,8 @@ class AgentService:
         except Exception as exc:  # noqa: BLE001 - surfaced to the model as an error
             return {"error": f"{type(exc).__name__}: {exc}"}
 
-    def _request(self, contents: list[dict], tools: bool) -> dict:
+    def _request(self, contents: list[dict], tools: bool,
+                 deadline: float | None = None) -> dict:
         payload: dict = {
             "contents": contents,
             "systemInstruction": {"parts": [{"text": AGENT_SYSTEM_PROMPT}]},
@@ -166,6 +171,8 @@ class AgentService:
         last_err = ""
         for key in self.keys:
             for model in self.models:
+                if deadline is not None and time.monotonic() > deadline:
+                    raise AgentError("Copilot deadline exceeded before a reply arrived")
                 try:
                     resp = httpx.post(
                         ENDPOINT.format(model=model), params={"key": key},
@@ -173,6 +180,9 @@ class AgentService:
                     )
                     if resp.status_code in RETRYABLE:
                         last_err = f"{model}: HTTP {resp.status_code}"
+                        if deadline is not None and time.monotonic() > deadline:
+                            raise AgentError(f"Copilot deadline exceeded (last: {last_err})")
+                        time.sleep(RETRY_BACKOFF_S)
                         continue
                     resp.raise_for_status()
                     return resp.json()

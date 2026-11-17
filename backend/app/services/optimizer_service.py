@@ -56,14 +56,16 @@ class OptimizerService:
         return self._solve(mu, cov, "max_sharpe")
 
     def for_volatility_band(self, mu: pd.Series, cov: pd.DataFrame,
-                            band: tuple[float, float]) -> tuple[dict[str, float], str]:
+                            band: tuple[float, float],
+                            frontier: list[dict] | None = None) -> tuple[dict[str, float], str]:
         """Pick the efficient portfolio whose volatility best matches the band.
 
         Strategy: among the frontier portfolios whose volatility lies inside the
         band, return the one with the highest Sharpe ratio; if none fits, return
-        the portfolio closest to the band's midpoint volatility.
+        the portfolio closest to the band's midpoint volatility. Pass a
+        precomputed `frontier` to avoid re-solving ~50 QPs per call.
         """
-        frontier = self.efficient_frontier(mu, cov)
+        frontier = frontier if frontier is not None else self.efficient_frontier(mu, cov)
         lo, hi = band
         inside = [p for p in frontier if lo <= p["volatility"] <= hi]
         if inside:

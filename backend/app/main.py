@@ -4,12 +4,15 @@ Run:  uvicorn app.main:app --reload --port 8000
 """
 from __future__ import annotations
 
+import collections
 import json
 import sqlite3
+import time
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import APP_DIR, ASSET_UNIVERSE, DB_PATH, RiskProfile, score_to_profile
@@ -32,6 +35,30 @@ DISCLAIMER = (
 )
 
 
+class RateLimiter:
+    """Simple in-memory sliding-window limiter (per client IP).
+
+    Protects the quota-consuming AI endpoints; no external dependency.
+    """
+
+    def __init__(self, max_calls: int = 10, period_s: float = 60.0) -> None:
+        self.max_calls = max_calls
+        self.period_s = period_s
+        self._hits: dict[str, collections.deque] = {}
+
+    def allow(self, client_ip: str) -> bool:
+        now = time.monotonic()
+        dq = self._hits.setdefault(client_ip, collections.deque())
+        while dq and now - dq[0] > self.period_s:
+            dq.popleft()
+        if len(dq) >= self.max_calls:
+            return False
+        dq.append(now)
+        if len(self._hits) > 10_000:  # bound memory
+            self._hits.clear()
+        return True
+
+
 class AuditLog:
     """Append-only SQLite audit trail of recommendations and agent questions."""
 
@@ -52,11 +79,13 @@ class AuditLog:
             )
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.execute("PRAGMA busy_timeout=5000")
+        return conn
 
     def append(self, profile: str, weights: dict, exp_ret: float, vol: float,
                use_ml: bool) -> int:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             cur = conn.execute(
                 "INSERT INTO recommendations (ts, profile, weights_json, expected_return,"
                 " volatility, use_ml) VALUES (?, ?, ?, ?, ?, ?)",
@@ -66,7 +95,7 @@ class AuditLog:
             return int(cur.lastrowid)
 
     def list(self, limit: int = 50) -> list[dict]:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             rows = conn.execute(
                 "SELECT id, ts, profile, weights_json, expected_return, volatility, use_ml"
                 " FROM recommendations ORDER BY id DESC LIMIT ?", (limit,)
@@ -77,8 +106,20 @@ class AuditLog:
             for r in rows
         ]
 
+    def list_agent(self, limit: int = 50) -> list[dict]:
+        with closing(self._connect()) as conn:
+            rows = conn.execute(
+                "SELECT id, ts, question, answer, tools_json"
+                " FROM agent_questions ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [
+            {"id": r[0], "ts": r[1], "question": r[2], "answer": r[3],
+             "tools": json.loads(r[4])}
+            for r in rows
+        ]
+
     def log_agent_question(self, question: str, answer: str, tools: list[str]) -> int:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             cur = conn.execute(
                 "INSERT INTO agent_questions (ts, question, answer, tools_json)"
                 " VALUES (?, ?, ?, ?)",
@@ -184,6 +225,7 @@ def create_app(data_service: DataService | None = None,
         return AgentService(tools=_agent_tools())
 
     agent = _build_agent()
+    ai_limiter = RateLimiter(max_calls=10, period_s=60.0)
 
     app.state.data_service = ds
     app.state.optimizer = optimizer
@@ -193,6 +235,7 @@ def create_app(data_service: DataService | None = None,
     app.state.ai = ai
     app.state.agent = agent
     app.state.rebuild_agent = _build_agent
+    app.state.ai_limiter = ai_limiter
 
     def history_or_404():
         try:
@@ -233,8 +276,10 @@ def create_app(data_service: DataService | None = None,
         if req.use_ml:
             views = ml.current_views(prices)
             mu = ml.blend_mu(mu, views)
+        frontier_raw = optimizer.efficient_frontier(mu, cov)
         try:
-            weights, method = optimizer.for_volatility_band(mu, cov, tuple(definition["vol_band"]))
+            weights, method = optimizer.for_volatility_band(
+                mu, cov, tuple(definition["vol_band"]), frontier=frontier_raw)
         except OptimizationError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
         exp_ret, vol, sharpe = optimizer.portfolio_stats(weights, mu, cov)
@@ -262,11 +307,13 @@ def create_app(data_service: DataService | None = None,
     def frontier() -> dict:
         prices = history_or_404()
         mu, cov = optimizer.estimates(prices)
-        points = [FrontierPoint(**p) for p in optimizer.efficient_frontier(mu, cov)]
+        frontier_raw = optimizer.efficient_frontier(mu, cov)
+        points = [FrontierPoint(**p) for p in frontier_raw]
         positions = {}
         for name, definition in RiskProfile.DEFINITIONS.items():
             try:
-                w, _ = optimizer.for_volatility_band(mu, cov, tuple(definition["vol_band"]))
+                w, _ = optimizer.for_volatility_band(
+                    mu, cov, tuple(definition["vol_band"]), frontier=frontier_raw)
                 ret, vol, _ = optimizer.portfolio_stats(w, mu, cov)
                 positions[name] = {"volatility": vol, "ret": ret}
             except OptimizationError:
@@ -335,18 +382,20 @@ def create_app(data_service: DataService | None = None,
 
     # ---------- audit ----------
     @app.get("/api/audit", response_model=list[AuditEntry])
-    def audit_list(limit: int = 50) -> list[AuditEntry]:
+    def audit_list(limit: int = Query(default=50, ge=1, le=200)) -> list[AuditEntry]:
         return [AuditEntry(**e) for e in audit.list(limit)]
 
     # ---------- AI Copilot agent ----------
     @app.post("/api/agent/chat")
-    def agent_chat(req: AgentChatRequest) -> dict:
+    def agent_chat(req: AgentChatRequest, ip: str = "local") -> dict:
         if not agent.available:
             raise HTTPException(
                 status_code=503,
                 detail="Copilot is unavailable: no GEMINI_API_KEY configured. "
                        "All other FinSight features work without it.",
             )
+        if not ai_limiter.allow(ip):
+            raise HTTPException(status_code=429, detail="Too many Copilot requests; wait a minute.")
         try:
             result = agent.chat(req.question, history=req.history)
         except AgentError as exc:
@@ -363,9 +412,13 @@ def create_app(data_service: DataService | None = None,
             "tools_used": tools_used,
         }
 
-    # ---------- AI commentary ----------
+    @app.get("/api/agent/questions")
+    def agent_questions(limit: int = Query(default=50, ge=1, le=200)) -> list[dict]:
+        return audit.list_agent(limit)
     @app.post("/api/explain", response_model=ExplainResponse)
-    def explain(req: ExplainRequest) -> ExplainResponse:
+    def explain(req: ExplainRequest, ip: str = "local") -> ExplainResponse:
+        if not ai_limiter.allow(ip):
+            raise HTTPException(status_code=429, detail="Too many AI requests; wait a minute.")
         """Plain-language explanation of an already-computed portfolio.
 
         Grounded on the numbers the optimizer actually produced; degrades to a

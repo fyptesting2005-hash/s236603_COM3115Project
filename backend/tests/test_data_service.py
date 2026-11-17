@@ -70,3 +70,38 @@ def test_raises_when_no_source_available(tmp_path):
                       snapshot_csv=tmp_path / "missing.csv", allow_network=False)
     with pytest.raises(Exception):
         svc.get_history(["SPY"], "2021-01-01")
+
+
+def test_partial_cache_falls_back_to_snapshot(tmp_path, synthetic_prices):
+    """Cache has half the tickers, snapshot the rest — no KeyError, full panel."""
+    snap_path = tmp_path / "snapshot.csv"
+    synthetic_prices.to_csv(snap_path)
+    svc = DataService(db_path=tmp_path / "partial.db", snapshot_csv=snap_path,
+                      allow_network=False)
+    svc._write_cache(synthetic_prices[synthetic_prices.columns[:4]])  # half only
+    out = svc.get_history(list(synthetic_prices.columns), "2021-01-01")
+    assert set(out.columns) == set(synthetic_prices.columns)
+    assert out.notna().all().all()
+
+
+def test_missing_ticker_everywhere_raises_clear_error(tmp_path, synthetic_prices):
+    snap_path = tmp_path / "snapshot.csv"
+    synthetic_prices.to_csv(snap_path)
+    svc = DataService(db_path=tmp_path / "partial.db", snapshot_csv=snap_path,
+                      allow_network=False)
+    svc._write_cache(synthetic_prices[synthetic_prices.columns[:4]])
+    with pytest.raises(Exception, match="BOGUS"):
+        svc.get_history(list(synthetic_prices.columns) + ["BOGUS"], "2021-01-01")
+
+
+def test_stale_check_detects_missing_ticker(data_service, synthetic_prices):
+    # fresh dates + full universe -> not stale
+    fresh = synthetic_prices.tail(10).copy()
+    fresh.index = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=10)
+    assert data_service._cache_is_stale(fresh, list(synthetic_prices.columns)) is False
+    # fresh dates but missing tickers -> stale
+    assert data_service._cache_is_stale(
+        fresh[list(synthetic_prices.columns[:4])], list(synthetic_prices.columns)) is True
+    # complete but old dates -> stale
+    old = data_service._read_cache(list(synthetic_prices.columns), "2021-01-01")
+    assert data_service._cache_is_stale(old, list(synthetic_prices.columns)) is True

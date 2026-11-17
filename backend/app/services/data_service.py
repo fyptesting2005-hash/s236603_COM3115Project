@@ -10,6 +10,8 @@ Cache-first design:
 from __future__ import annotations
 
 import sqlite3
+import threading
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -29,15 +31,17 @@ class DataService:
         self.db_path = Path(db_path)
         self.snapshot_csv = Path(snapshot_csv)
         self.allow_network = allow_network
+        self._download_lock = threading.Lock()
         self._ensure_table()
 
     # ---------- cache plumbing ----------
     def _connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.execute("PRAGMA busy_timeout=5000")
         return conn
 
     def _ensure_table(self) -> None:
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             conn.execute(
                 "CREATE TABLE IF NOT EXISTS prices ("
                 " ticker TEXT NOT NULL, date TEXT NOT NULL, close REAL NOT NULL,"
@@ -47,7 +51,7 @@ class DataService:
     def _read_cache(self, tickers: list[str], start: str) -> pd.DataFrame:
         query = "SELECT ticker, date, close FROM prices WHERE date >= ? AND ticker IN (%s)"
         placeholders = ",".join("?" for _ in tickers)
-        with self._connect() as conn:
+        with closing(self._connect()) as conn:
             df = pd.read_sql_query(query % placeholders, conn, params=(start, *tickers))
         if df.empty:
             return pd.DataFrame()
@@ -62,15 +66,18 @@ class DataService:
             for ticker, close in row.items()
             if pd.notna(close)
         ]
-        with self._connect() as conn:
+        with closing(self._connect()) as conn, conn:
             conn.executemany(
                 "INSERT OR REPLACE INTO prices (ticker, date, close) VALUES (?, ?, ?)", rows
             )
 
-    def _cache_is_stale(self, cached: pd.DataFrame) -> bool:
+    def _cache_is_stale(self, cached: pd.DataFrame, tickers: list[str]) -> bool:
         if cached.empty:
             return True
-        # stale when the newest cached close is older than 5 calendar days
+        # stale when the newest cached close is older than 5 calendar days,
+        # or when any requested ticker is missing from the cache entirely
+        if any(t not in cached.columns for t in tickers):
+            return True
         newest = cached.index.max()
         return newest < pd.Timestamp.today().normalize() - timedelta(days=5)
 
@@ -105,19 +112,42 @@ class DataService:
     # ---------- public API ----------
     def get_history(self, tickers: list[str], start: str = START_DATE,
                     allow_network: bool | None = None) -> pd.DataFrame:
-        """Return cleaned adjusted-close prices, cache-first with offline fallback."""
+        """Return cleaned adjusted-close prices, cache-first with offline fallback.
+
+        Fallback order: fresh download -> cached columns -> offline snapshot for
+        whatever tickers the cache is missing. Raises DataUnavailableError (-> 503)
+        with a clear message if any requested ticker cannot be served.
+        """
         allow_network = self.allow_network if allow_network is None else allow_network
         cached = self._read_cache(tickers, start)
-        if self._cache_is_stale(cached) and allow_network:
-            try:
-                fresh = self._download(tickers, start)
-                self._write_cache(fresh)
-                cached = self._read_cache(tickers, start)
-            except Exception:  # noqa: BLE001 - offline fallback is intentional
-                cached = cached if not cached.empty else self._load_snapshot(tickers, start)
-        elif cached.empty:
-            cached = self._load_snapshot(tickers, start)
-        cleaned = self.clean(cached[tickers] if not cached.empty else cached)
+        if self._cache_is_stale(cached, tickers) and allow_network:
+            # one download at a time: N concurrent requests on a stale cache must
+            # not trigger N full-history Yahoo Finance downloads
+            with self._download_lock:
+                try:
+                    fresh = self._download(tickers, start)
+                    self._write_cache(fresh)
+                    cached = self._read_cache(tickers, start)
+                except Exception:  # noqa: BLE001 - offline fallback is intentional
+                    pass
+
+        have = [t for t in tickers if not cached.empty and t in cached.columns]
+        missing = [t for t in tickers if t not in have]
+        if missing:
+            snap = self._load_snapshot(missing, start)
+            if not snap.empty:
+                if cached.empty:
+                    cached = snap
+                else:
+                    cached = cached.join(snap, how="outer")
+
+        still_missing = [t for t in tickers if cached.empty or t not in cached.columns]
+        if still_missing:
+            raise DataUnavailableError(
+                f"No price data available for: {still_missing} "
+                "(cache empty/incomplete, network unavailable, no snapshot)"
+            )
+        cleaned = self.clean(cached[tickers])
         if cleaned.empty:
             raise DataUnavailableError(
                 "No price data available: cache empty, network disabled, no snapshot"

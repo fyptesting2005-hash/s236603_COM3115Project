@@ -1,7 +1,9 @@
 """Pydantic request/response models for the FinSight API."""
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
+
+from .config import ASSET_UNIVERSE
 
 
 class RiskAnswers(BaseModel):
@@ -112,6 +114,19 @@ class ExplainRequest(BaseModel):
     expected_return: float = Field(ge=-1.0, le=2.0)
     volatility: float = Field(ge=0.0, le=2.0)
     sharpe: float = Field(ge=-10.0, le=10.0)
+
+    @model_validator(mode="after")
+    def _validate_weights(self) -> "ExplainRequest":
+        """Weights must reference the real universe — blocks prompt injection and
+        cache-signature stuffing via arbitrary keys."""
+        unknown = sorted(set(self.weights) - set(ASSET_UNIVERSE))
+        if unknown:
+            raise ValueError(f"unknown tickers: {unknown}")
+        if any(w < 0 for w in self.weights.values()):
+            raise ValueError("weights must be non-negative")
+        if abs(sum(self.weights.values()) - 1.0) > 1e-6:
+            raise ValueError("weights must sum to 1")
+        return self
 
 
 class AgentTurn(BaseModel):
