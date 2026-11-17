@@ -76,6 +76,10 @@ def test_50_50_blend_sits_between_components(backtester, synthetic_prices):
 
 
 def test_api_agent_endpoint_contract(client, monkeypatch):
+    # CI has no backend/.env, so make the agent "available" hermetically too
+    monkeypatch.setattr(client.app.state.agent, "keys", ["test-key"])
+    monkeypatch.setattr(client.app.state.agent, "tools", {"get_universe": lambda: {}})
+
     def canned(question, history=None):
         return {"answer": "With 30% gold ... (grounded)",
                 "tool_trace": [{"tool": "backtest_fixed_weights", "args": {},
