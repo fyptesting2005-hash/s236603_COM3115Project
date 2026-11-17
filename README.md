@@ -14,10 +14,10 @@ prediction, wrapped in a compliance-aware onboarding flow (SFC suitability & KYC
 | # | Feature | Course Mapping |
 |---|---------|----------------|
 | 1 | Risk-profiling questionnaire (age / horizon / loss tolerance / liquidity) → Conservative / Balanced / Aggressive | KYC-style onboarding, suitability |
-| 2 | Real-time market data (HK + US ETFs) via Yahoo Finance with SQLite caching | Data engineering |
+| 2 | Near-real-time market data (HK + US ETFs) via Yahoo Finance with SQLite caching | Data engineering |
 | 3 | Markowitz optimization: Min-Volatility, Max-Sharpe, Efficient Frontier | MPT (MILO a) |
 | 4 | ML expected-return & volatility features (Random Forest, walk-forward validation) | ML regression (MILO d) |
-| 5 | Vectorized backtesting vs. HSI / SPY benchmarks (CAGR, Sharpe, Max Drawdown) | Analytics (MILO d) |
+| 5 | Vectorized backtesting vs. 2800.HK / SPY benchmarks (CAGR, Sharpe, Max Drawdown) | Analytics (MILO d) |
 | 6 | React dashboard: frontier, allocation, equity curve, EDA tab | Full-stack integration (MILO b) |
 | 7 | Compliance module: risk-suitability matching, disclaimers, audit log | Regulatory (MILO c) |
 | 8 | Gemini-powered plain-language portfolio commentary (grounded on computed metrics, offline fallback) | GenAI integration (MILO b/d) |
@@ -29,7 +29,7 @@ prediction, wrapped in a compliance-aware onboarding flow (SFC suitability & KYC
 Browser → React SPA (Vite + Recharts)
               │ REST (JSON)
               ▼
-        FastAPI (Python 3.13)
+        FastAPI (Python 3.10+)
         ├─ DataService       yfinance + SQLite cache
         ├─ OptimizerService  PyPortfolioOpt (Markowitz)
         ├─ MLService         scikit-learn RF + walk-forward CV
@@ -91,6 +91,8 @@ npm run dev
 cd backend
 pytest -v
 ```
+
+CI runs the same suite on every push (see `.github/workflows/ci.yml`).
 
 ## Milestones (course schedule)
 

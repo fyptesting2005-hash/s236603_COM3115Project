@@ -1,10 +1,25 @@
 /* Thin fetch wrappers around the FinSight API. */
 
+const REQUEST_TIMEOUT_MS = 150000; // agent backtests can legitimately take a while
+
 async function request(path, options = {}) {
-  const resp = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+  let resp;
+  try {
+    resp = await fetch(path, {
+      headers: { "Content-Type": "application/json" },
+      ...options,
+      signal: ctrl.signal,
+    });
+  } catch (e) {
+    clearTimeout(timer);
+    if (e.name === "AbortError") {
+      throw new Error("Request timed out — please try again.");
+    }
+    throw new Error("Network error — is the backend running on port 8000?");
+  }
+  clearTimeout(timer);
   if (!resp.ok) {
     let detail = resp.statusText;
     try {
@@ -31,6 +46,7 @@ export const api = {
   audit: () => request("/api/audit"),
   explain: (req) => request("/api/explain", { method: "POST", body: JSON.stringify(req) }),
   agentChat: (req) => request("/api/agent/chat", { method: "POST", body: JSON.stringify(req) }),
+  agentQuestions: (limit = 50) => request(`/api/agent/questions?limit=${limit}`),
 };
 
 export const pct = (x, digits = 1) =>

@@ -1,13 +1,13 @@
 # FinSight — Live Demo Checklist
 
 Print this page or keep it on a second screen during the presentation (slides:
-`docs/COM3115_Final_Presentation.pptx`, slide 11 is the demo script).
+`docs/COM3115_Final_Presentation.pptx`, slide 12 is the demo script, slide 11 introduces the Copilot).
 
 ## T-1 day: preparation
 
 - [ ] `cd backend && pip install -r requirements.txt` (clean venv check)
 - [ ] `python warmup.py` — cache warms from Yahoo Finance; all 9 smoke checks must print `[OK]`
-- [ ] `pytest -q` from `backend/` — expect **39 passed**
+- [ ] `pytest -q` from `backend/` — expect **76 passed**
 - [ ] `cd ../frontend && npm install && npm run build` — expect a clean build
 - [ ] Confirm `backend/app/data/prices_snapshot.csv` exists (offline fallback)
 - [ ] **Pre-warm the demo path once** (results are then cached and instant):
@@ -41,7 +41,7 @@ Fallbacks:
 
 ## Likely Q&A
 
-- **Why did the ML strategy underperform?** Walk-forward hit rate 64.6% but RMSE barely
+- **Why did the ML strategy underperform?** Leak-free walk-forward hit rate 64.9% but RMSE ~0.4%
   below baseline; the optimizer consumes magnitude, not direction; α=0.30 propagates
   estimation error into the weakest input of MPT. Report Ch. 5.3.
 - **Why GLD so large in the balanced portfolio?** Recent-window mean-variance favours

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
@@ -7,6 +7,7 @@ import FrontierChart from "./FrontierChart.jsx";
 import BacktestView from "./BacktestView.jsx";
 import EdaView from "./EdaView.jsx";
 import MarketView from "./MarketView.jsx";
+import ComplianceView from "./ComplianceView.jsx";
 
 const PIE_COLORS = ["#0f2a43", "#d4875a", "#0fa3a3", "#5b8db8", "#a05a20",
   "#7ba68a", "#b3402a", "#9687a8"];
@@ -139,6 +140,7 @@ export default function Dashboard({ profile, onRestart }) {
     ["backtest", "Backtest"],
     ["eda", "Data Explorer (EDA)"],
     ["market", "Market Data"],
+    ["compliance", "Compliance Log"],
   ];
 
   return (
@@ -170,6 +172,7 @@ export default function Dashboard({ profile, onRestart }) {
       {tab === "backtest" && <BacktestView />}
       {tab === "eda" && <EdaView />}
       {tab === "market" && <MarketView />}
+      {tab === "compliance" && <ComplianceView />}
     </div>
   );
 }

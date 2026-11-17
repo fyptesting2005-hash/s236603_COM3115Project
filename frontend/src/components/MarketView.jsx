@@ -11,16 +11,18 @@ export default function MarketView() {
   const [error, setError] = useState("");
 
   useEffect(() => {
+    let alive = true;
     api.universe()
       .then((u) => {
+        if (!alive) return;
         setTickers(u.tickers);
         if (u.tickers.length && !u.tickers.some((t) => t.ticker === ticker)) {
           setTicker(u.tickers[0].ticker);
         }
       })
-      .catch((e) => setError(String(e.message || e)));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+      .catch((e) => alive && setError(String(e.message || e)));
+    return () => { alive = false; };
+  }, []); // run once: the universe list is static
 
   useEffect(() => {
     let alive = true;
@@ -48,6 +50,7 @@ export default function MarketView() {
         </select>
       </label>
       {error && <div className="error">{error}</div>}
+      {!data && !error && <div className="loading">Loading {ticker} prices…</div>}
       {data && chartData && (
         <>
           <div className="stat-row">
