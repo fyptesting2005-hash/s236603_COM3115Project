@@ -7,7 +7,7 @@ Print this page or keep it on a second screen during the presentation (slides:
 
 - [ ] `cd backend && pip install -r requirements.txt` (clean venv check)
 - [ ] `python warmup.py` — cache warms from Yahoo Finance; all 9 smoke checks must print `[OK]`
-- [ ] `pytest -q` from `backend/` — expect **76 passed**
+- [ ] `pytest -q` from `backend/` — expect **77 passed**
 - [ ] `cd ../frontend && npm install && npm run build` — expect a clean build
 - [ ] Confirm `backend/app/data/prices_snapshot.csv` exists (offline fallback)
 - [ ] **Pre-warm the demo path once** (results are then cached and instant):
